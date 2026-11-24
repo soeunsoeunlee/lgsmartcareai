@@ -1,0 +1,21 @@
+# Local configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies
+.venv/
+node_modules/
+
+# Generated files
+dist/
+__pycache__/
+
+# Logs
+*.log
+
+# Local consultation records
+/database/cases/
+
+# Original manuals and recordings kept locally
+/데이터/

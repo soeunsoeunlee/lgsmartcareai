@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102956">
+  <title>SmartCare · 내 가전 상담</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="top"><div class="top-inner"><span class="brand"><span class="brand-mark" aria-hidden="true"></span>Smart<span>Care</span></span>
+    <nav aria-label="메인 메뉴">
+      <button type="button" id="chat-tab">상담</button>
+      <button type="button" id="device-tab">내 기기</button>
+      <button type="button" id="history-tab">내 상담</button>
+    </nav>
+  </div></header>
+  <main>
+    <section class="intro">
+      <h1>내 가전 상담</h1>
+      <p>제품별 증상과 조치 이력을 한곳에서 확인하세요.</p>
+    </section>
+    <section id="device-panel" class="panel" hidden>
+      <h2>내 기기 등록</h2>
+      <p>제품 라벨의 모델명을 등록하면 상담에서 다시 묻지 않습니다.</p>
+      <form id="device-form">
+        <label for="device-category">제품 유형</label>
+        <select id="device-category"></select>
+        <label for="device-name">기기 별명 (선택)</label>
+        <input id="device-name" maxlength="60" placeholder="예: 세탁실 세탁기">
+        <label for="model-input">모델명</label>
+        <div class="inline"><input id="model-input" maxlength="40" placeholder="예: TR14WK1" autocapitalize="characters" required>
+          <button class="primary">저장</button></div>
+        <p id="supported" class="hint"></p>
+      </form>
+      <p id="device-status" role="status"></p>
+      <ul id="device-list" class="record-list" aria-label="등록한 기기"></ul>
+      <button type="button" id="device-start" class="secondary">상담 열기</button>
+    </section>
+    <section id="history-panel" class="panel" hidden>
+      <h2>내 상담</h2>
+      <p id="history-status" role="status"></p>
+      <ul id="history-list" class="record-list" aria-label="상담 이력"></ul>
+    </section>
+    <section id="chat-panel" class="panel" hidden>
+      <div class="panel-head"><div><h2>자가조치 상담</h2><p id="current-model" class="hint"></p></div>
+        <button type="button" id="new-chat" class="secondary">새 상담</button></div>
+      <div id="messages" class="messages" aria-label="상담 대화">
+        <div id="transcript" class="transcript" role="log" aria-label="상담 메시지"></div>
+        <div id="choices" class="choices" role="group" aria-label="답변 선택" hidden></div>
+      </div>
+      <form id="chat-form" class="inline" hidden>
+        <input id="chat-input" aria-label="메시지" maxlength="3000" placeholder="증상이나 에러코드를 입력해 주세요" required>
+        <button class="primary">보내기</button>
+      </form>
+      <section id="saved-report" class="evidence" aria-labelledby="saved-report-title" hidden>
+        <div class="panel-head"><h3 id="saved-report-title">저장한 증상 기록</h3>
+          <button id="edit-report" type="button" class="secondary">수정</button></div>
+        <dl id="saved-report-values" class="saved-report-values"></dl>
+        <div id="saved-report-media" class="saved-report-media" aria-label="저장한 사진·동영상·녹음" hidden></div>
+        <p id="report-save-status" role="status"></p>
+      </section>
+      <section id="evidence-panel" class="evidence" hidden>
+        <h3 id="evidence-title">서비스센터에 전달할 증상 정보</h3>
+        <p id="evidence-description"></p>
+        <form id="evidence-form">
+          <div id="report-fields" class="report-grid">
+            <div><label for="purchase-period">제품 구매 시기</label>
+              <select id="purchase-period" name="purchase_period">
+                <option value="date">날짜 선택</option><option>모름</option><option>직접 입력</option>
+              </select>
+              <input type="date" data-date="purchase_period" aria-label="구매 날짜">
+              <input data-custom="purchase_period" aria-label="구매 시기 직접 입력" maxlength="100" placeholder="예: 2023년 가을" hidden disabled></div>
+            <div><label for="symptom-category">증상 유형</label>
+              <select id="symptom-category" name="symptom_category">
+                <option value="">선택</option><option>급수·배수 이상</option><option>소음·진동</option><option>전원·작동 이상</option>
+                <option>누수</option><option>문·잠금 이상</option><option>직접 입력</option>
+              </select><input data-custom="symptom_category" aria-label="증상 유형 직접 입력" maxlength="100" hidden disabled></div>
+            <div><label for="cycle-stage">발생한 작동 단계</label>
+              <select id="cycle-stage" name="cycle_stage">
+                <option value="">선택</option><option>전원 켤 때</option><option>급수</option><option>세탁</option>
+                <option>헹굼</option><option>배수</option><option>탈수</option><option>모름</option><option>직접 입력</option>
+              </select><input data-custom="cycle_stage" aria-label="작동 단계 직접 입력" maxlength="100" hidden disabled></div>
+            <div><label for="first-observed">처음 발생한 시점</label>
+              <select id="first-observed" name="first_observed">
+                <option value="date">날짜 선택</option><option>모름</option><option>직접 입력</option>
+              </select>
+              <input type="date" data-date="first_observed" aria-label="처음 발생한 날짜">
+              <input data-custom="first_observed" aria-label="처음 발생 시점 직접 입력" maxlength="100" placeholder="예: 지난주 토요일" hidden disabled></div>
+            <div><label for="frequency">발생 빈도</label>
+              <select id="frequency" name="frequency">
+                <option value="">선택</option><option>한 번</option><option>가끔</option><option>사용할 때마다</option><option>상시</option>
+                <option>모름</option><option>직접 입력</option>
+              </select><input data-custom="frequency" aria-label="빈도 직접 입력" maxlength="100" hidden disabled></div>
+            <div><label for="prior-actions">이미 해본 조치와 결과</label>
+              <input id="prior-actions" name="prior_actions" maxlength="500" placeholder="예: 필터를 확인했지만 그대로입니다."></div>
+          </div>
+          <div id="detail-fields"><label for="detail">상세 증상</label>
+          <textarea id="detail" required maxlength="3000" rows="4" placeholder="예: 탈수 직전에 배수가 멈췄고 OE가 반복해서 표시됩니다."></textarea></div>
+          <div id="attachment-fields">
+          <label for="files">사진·동영상·녹음 첨부 (선택)</label>
+          <input id="files" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.webm,.wav,.mp3,.m4a,.ogg">
+          <p class="hint">최대 5개 · 파일당 25MB</p>
+          <div class="record-actions capture-controls">
+            <button id="capture-audio" type="button" class="secondary">녹음하기</button>
+            <button id="capture-photo" type="button" class="secondary">사진 찍기</button>
+            <button id="capture-video" type="button" class="secondary">영상 촬영하기</button>
+          </div>
+          <p id="capture-status" class="hint" role="status"></p>
+          <video id="capture-preview" autoplay muted playsinline hidden></video>
+          <div id="capture-session" class="record-actions" hidden>
+            <button id="capture-confirm" type="button" class="secondary" disabled>촬영</button>
+            <button id="capture-cancel" type="button" class="secondary">취소</button>
+          </div>
+          <ul id="file-previews"></ul>
+          </div>
+          <button id="evidence-submit" class="primary">증상 자료 저장</button>
+          <button id="cancel-report-edit" type="button" class="secondary" hidden>취소</button>
+        </form>
+      </section>
+      <section id="schedule-panel" class="evidence" aria-labelledby="schedule-title" hidden>
+        <h3 id="schedule-title">희망 방문 일정</h3>
+        <p>가능한 날짜와 시간을 선택해 주세요. 시간은 한국 시간 기준입니다.</p>
+        <form id="schedule-form">
+          <div class="report-grid">
+            <div><label for="visit-date">희망 날짜</label><input id="visit-date" type="date" required></div>
+            <div><label for="visit-time">희망 시간</label><input id="visit-time" type="time" required></div>
+            <div><label for="callback-phone">연락받을 번호</label>
+              <input id="callback-phone" type="tel" maxlength="24" value="010-1234-5678" autocomplete="tel">
+              <p class="hint">기본 연락처가 입력되어 있어요. 다른 번호로 연락받으려면 실제 연락받을 번호를 정확히 입력해 주세요.</p></div>
+          </div>
+          <button class="primary" id="schedule-submit">A/S 접수 신청</button>
+        </form>
+      </section>
+      <section id="schedule-complete" class="evidence" aria-labelledby="completion-title" hidden>
+        <h3 id="completion-title" tabindex="-1">A/S 접수 신청이 완료되었습니다</h3>
+        <p>희망 방문 일정 <strong id="scheduled-time"></strong></p>
+        <p>기사 배정·연락 시스템 연동 후에는 접수 시점부터 24시간 안에 담당 기사가 전화로 연락드릴 예정입니다. 선택하신 시간이 어려우면 기사와 통화해 방문 일정을 다시 잡을 수 있습니다.</p>
+        <p class="hint">현재 신청은 이 상담에 저장되었으며 기사에게 일정이 전송되거나 방문이 확정되는 기능은 아직 연결되어 있지 않습니다.</p>
+      </section>
+      <section id="customer-report" class="evidence" aria-labelledby="customer-report-title" hidden>
+        <h3 id="customer-report-title">고객용 AI 리포트</h3>
+        <div id="report-assessment" class="report-assessment">
+          <p class="hint">가능한 원인 · 참고용</p>
+          <h4 id="assessment-title"></h4>
+          <p id="assessment-explanation"></p>
+          <p id="assessment-basis" class="hint"></p>
+          <p id="assessment-observation" class="hint assessment-observation" hidden></p>
+          <a id="assessment-source" target="_blank" rel="noopener noreferrer" hidden>LG전자 공식 참고 자료</a>
+        </div>
+        <dl id="customer-report-values" class="saved-report-values"></dl>
+      </section>
+      <p id="chat-status" role="status"></p>
+    </section>
+  </main>
+</body>
+</html>
