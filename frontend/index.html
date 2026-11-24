@@ -30,8 +30,9 @@
         <label for="device-name">기기 별명 (선택)</label>
         <input id="device-name" maxlength="60" placeholder="예: 세탁실 세탁기">
         <label for="model-input">모델명</label>
-        <div class="inline"><input id="model-input" maxlength="40" placeholder="예: TR14WK1" autocapitalize="characters" required>
+        <div class="inline"><input id="model-input" list="supported-models" maxlength="40" placeholder="예: TR14WK1" autocapitalize="characters" required>
           <button class="primary">저장</button></div>
+        <datalist id="supported-models"></datalist>
         <p id="supported" class="hint"></p>
       </form>
       <p id="device-status" role="status"></p>
@@ -147,6 +148,7 @@
           <p id="assessment-explanation"></p>
           <p id="assessment-basis" class="hint"></p>
           <p id="assessment-observation" class="hint assessment-observation" hidden></p>
+          <p id="assessment-manual" class="hint" hidden></p>
           <a id="assessment-source" target="_blank" rel="noopener noreferrer" hidden>LG전자 공식 참고 자료</a>
         </div>
         <dl id="customer-report-values" class="saved-report-values"></dl>

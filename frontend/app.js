@@ -142,6 +142,8 @@ function renderCustomerReport(report) {
     ui["assessment-basis"].textContent = "판단 근거 · " + assessment.basis;
     ui["assessment-observation"].hidden = !assessment.observation;
     ui["assessment-observation"].textContent = assessment.observation ? "고객이 직접 입력한 증상 · " + assessment.observation : "";
+    ui["assessment-manual"].hidden = !assessment.manual_note;
+    ui["assessment-manual"].textContent = assessment.manual_note || "";
     ui["assessment-source"].hidden = !assessment.source_url;
     if (assessment.source_url) ui["assessment-source"].href = assessment.source_url;
   }
@@ -151,7 +153,7 @@ function renderCustomerReport(report) {
     service_declined: "A/S 신청 없이 상담 종료"};
   const details = [
     ["제품 모델", report.model || "미확인"],
-    ["에러코드", report.error_code || (report.display_code_status === "not_displayed" ? "표시 없음" : "미확인")],
+    ["에러코드·표시 문구", report.display_label || report.error_code || (report.display_code_status === "not_displayed" ? "표시 없음" : "미확인")],
     ["신고한 증상", report.symptom || "기록 없음"],
     ["처음 발생", report.first_observed],
     ["발생 상황", [report.cycle_stage, report.frequency].filter(Boolean).join(" · ")],
@@ -432,7 +434,7 @@ ui["history-tab"].onclick = async () => {
       const row = document.createElement("li");
       const info = document.createElement("div");
       const name = document.createElement("strong");
-      name.textContent = [categories[item.category], item.device_name, item.model, item.error_code]
+      name.textContent = [categories[item.category], item.device_name, item.model, item.display_label || item.error_code]
         .filter((value, index, values) => value && values.indexOf(value) === index).join(" · ");
       const dates = document.createElement("p");
       dates.className = "hint";
@@ -781,7 +783,8 @@ ui["evidence-form"].onsubmit = event => {
 
 api("/api/models").then(data => {
   supportedModels = data.models;
-  ui.supported.textContent = "자가조치 지원 모델 · " + supportedModels.join(", ");
+  ui["supported-models"].replaceChildren(...supportedModels.map(model => new Option(model, model)));
+  ui.supported.textContent = "매뉴얼이 연결된 세탁기 모델 " + supportedModels.length + "개";
 }).catch(() => {});
 renderDevices();
 startChat();

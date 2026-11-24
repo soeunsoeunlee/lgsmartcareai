@@ -5,7 +5,8 @@ from zipfile import BadZipFile
 from pymupdf import FileDataError
 
 from case_store import Case, now
-from manual_search import MANUALS, explain_alert, reviewed_alert_steps, search_oe
+from manual_catalog import LABEL_CODES
+from manual_search import MANUALS, explain_alert, has_manual, reviewed_alert_steps, search_oe, source_location
 
 
 MODEL_LABEL = "제품 라벨에서 ‘모델명’으로 표시된 값을 확인해 알려주시겠어요?"
@@ -60,6 +61,8 @@ def observed_hose_conditions(text: str) -> set[str]:
 
 
 def referenced_actions(archive: Path, model: str) -> list[dict]:
+    if model not in MANUALS:
+        return reviewed_alert_steps(archive, model, "OE")
     document_id, rows = search_oe(archive, model)
     actions = {}
     for page, excerpt in rows:
@@ -182,16 +185,21 @@ class SelfCareAgent:
         elif self.web and not case.model and re.fullmatch(r"[A-Z0-9.-]{2,40}", text, re.I | re.ASCII):
             case.model = text.upper()
         codes = {code.upper() for code in CODE_PATTERN.findall(text)}
+        if self.web and self.asked_code and text in LABEL_CODES:
+            codes = {LABEL_CODES[text]}
         if len(codes) == 1:
             detected = codes.pop()
             case.error_code = "CL" if detected == "[L" else detected
+            case.display_label = text if self.web and text in LABEL_CODES and re.search(r"[가-힣]", text) else None
             case.display_code_status = "reported"
         elif self.web and self.asked_code and re.fullmatch(r"[A-Z0-9-]{2,12}", text, re.I | re.ASCII):
             case.error_code = text.upper()
+            case.display_label = None
             case.display_code_status = "reported"
         if re.search(r"코드\s*(?:는\s*)?(?:없|안\s*보)", text) or text == "코드 확인 어려움":
             self.no_displayed_code = True
             case.error_code = None
+            case.display_label = None
             case.display_code_status = "unconfirmed" if text == "코드 확인 어려움" else "not_displayed"
         symptom = MODEL_PATTERN.sub("", text).strip()
         if symptom and not re.fullmatch(r"(?:모델(?:명)?\s*(?:은|이)?\s*)?(?:이에요|예요|입니다)?[.! ]*", symptom):
@@ -224,11 +232,11 @@ class SelfCareAgent:
         if self.web and case.error_code is None and not self.asked_code:
             self.asked_code = True
             return CODE_PROMPT
-        if self.web and case.model not in MANUALS:
+        if self.web and not has_manual(self.archive, case.model):
             case.status = "collecting_report"
             return f"{case.model} 모델의 매뉴얼은 아직 등록되지 않았어요. 서비스센터가 확인할 증상을 기록해 주세요."
         if self.web and case.error_code:
-            explanation = explain_alert(case.model, case.error_code)
+            explanation = explain_alert(case.model, case.error_code, self.archive)
             if explanation is None:
                 explanation = f"{case.error_code} · 이 모델의 매뉴얼에서 코드의 의미를 확인하지 못했어요."
             return explanation + "\n" + self.manual_guidance(" ".join(case.symptoms))
@@ -345,7 +353,7 @@ class SelfCareAgent:
         source = action["source"]
         return (
             f"매뉴얼에 따라 먼저 확인할게요. {action['condition']}\n"
-            f"출처: {source['manual_name']} ({source['document_id']}), PDF {source['pdf_page']}쪽\n"
+            f"출처: {source['manual_name']} ({source['document_id']}), {source_location(source)}\n"
             "‘네’, ‘아니요’, ‘확인 어려워요’ 중 하나로 알려주세요."
         )
 
@@ -403,7 +411,7 @@ class SelfCareAgent:
         # A symptom may suggest a manual section without being a reported code.
         matches = [section for section, pattern in SYMPTOM_MANUAL_SECTIONS if pattern.search(detail)]
         section = code or (matches[0] if len(matches) == 1 else None)
-        if self.case.category == "washer" and self.case.model in MANUALS and (section or observed):
+        if self.case.category == "washer" and (section or observed) and has_manual(self.archive, self.case.model):
             try:
                 if section in {None, "OE"}:
                     self.pending = [action for action in referenced_actions(self.archive, self.case.model)
@@ -424,6 +432,6 @@ class SelfCareAgent:
         label = "직전 안내" if repeat else f"자가조치 {step}단계"
         return (
             f"{label}. {action['instruction']}\n"
-            f"출처: {source['manual_name']} ({source['document_id']}), PDF {source['pdf_page']}쪽\n"
+            f"출처: {source['manual_name']} ({source['document_id']}), {source_location(source)}\n"
             f"참고 원문:\n{source['excerpt']}\n{OUTCOME_PROMPT}"
         )

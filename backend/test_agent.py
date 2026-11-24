@@ -111,6 +111,27 @@ class LocalAgentTests(unittest.TestCase):
                     self.assertEqual(len(steps), count)
                     self.assertTrue(all(step["source"]["filename"] == filename for step in steps))
 
+    def test_expanded_pdf_and_html_manuals_keep_model_specific_sources(self):
+        from manual_search import alerts_for, available_models
+
+        models = available_models(DEFAULT_ARCHIVE)
+        self.assertIn("F9WTBQ", models)
+        self.assertIn("T19DX8", models)
+        self.assertIn("T23PZ9", models)  # Cover-listed model sharing T22PZ9's manual.
+        self.assertNotIn("F21VDSK", models)
+        self.assertIn("배수 안 됨", alerts_for(DEFAULT_ARCHIVE, "T22PZ9"))
+        examples = [("T22PZ9", "배수 안 됨", "PDF 52쪽"), ("F9WTBQ", "OE", "PDF 40쪽"),
+                    ("T19DX8", "OE", "HTML 도움말 ko-kr/topics/topic_53.html")]
+        for model, alert, source in examples:
+            with self.subTest(model=model):
+                agent = SelfCareAgent(DEFAULT_ARCHIVE, model=model, web=True)
+                agent.start()
+                self.assertIn(source, agent.handle(alert))
+                self.assertIn(source, agent.handle("네"))
+                self.assertEqual(agent.case.actions[0]["source"]["manual_name"], f"LG 세탁기 사용설명서 {model}")
+                if alert == "배수 안 됨":
+                    self.assertEqual(agent.case.display_label, alert)
+
     def test_web_no_code_fill_symptom_selects_inlet_checks_without_assigning_code(self):
         agent = SelfCareAgent(DEFAULT_ARCHIVE, model="TR14WK1", web=True)
         agent.start()

@@ -12,7 +12,7 @@ from uuid import uuid4
 from agent import TERMINAL_STATES, SelfCareAgent
 from case_store import JsonCaseStore, now
 from cli import DEFAULT_ARCHIVE, ROOT
-from manual_search import MANUALS, MANUAL_ALERTS
+from manual_search import MANUALS, alerts_for, available_models
 from reports import customer_report
 
 
@@ -95,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/api/models":
-            self.json_response(200, models=list(MANUALS))
+            self.json_response(200, models=available_models(self.server.archive))
         elif self.path == "/api/cases":
             browser_id = self.browser_id()
             history = self.server.store.history(browser_id) if browser_id else []
@@ -136,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def summary(case):
         return {key: getattr(case, key) for key in (
-            "case_id", "model", "category", "device_id", "device_name", "error_code", "status",
+            "case_id", "model", "category", "device_id", "device_name", "error_code", "display_label", "status",
             "created_at", "updated_at", "previous_case_id", "evidence_submitted_at",
         )}
 
@@ -406,13 +406,13 @@ class Handler(BaseHTTPRequestHandler):
             "service_offered": ["네", "아니요"],
         }.get(case.status, [])
         if case.status == "collecting":
-            choices = ([*MANUAL_ALERTS, "코드 없음", "코드 확인 어려움"] if case.model
+            choices = ([*alerts_for(agent.archive, case.model), "코드 없음", "코드 확인 어려움"] if case.model
                        else [*MANUALS, "모델명 확인 어려움"]) if case.category == "washer" else ["모델명 확인 어려움"]
         if case.service_request:
             # The private callback number is available in the local handoff record only.
             extra["schedule"] = {key: value for key, value in case.service_request.items() if key != "callback_phone"}
         if case.status in {"resolved", "service_submitted", "service_declined"}:
-            extra["customer_report"] = customer_report(case)
+            extra["customer_report"] = customer_report(case, agent.archive)
         if case.service_detail:
             extra.update(detail=case.service_detail, report_fields=case.report_details,
                          media=[{key: attachment[key] for key in ("id", "name", "mime")} for attachment in case.attachments])

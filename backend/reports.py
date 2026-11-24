@@ -2,7 +2,7 @@
 
 from case_store import Case
 from agent import SYMPTOM_MANUAL_SECTIONS, observed_hose_conditions
-from manual_search import explain_alert
+from manual_search import explain_alert, source_location
 
 
 LG_SUPPORT = "https://www.lge.co.kr/support/solutions-20152965504689"
@@ -24,11 +24,12 @@ WASHER_CAUSES = {
 }
 
 
-def assessment_for(case: Case, symptom: str) -> dict:
+def assessment_for(case: Case, symptom: str, archive=None) -> dict:
     reported_code = case.error_code
     observation = case.service_detail
     findings = {"observation": observation} if observation else {}
-    basis = f"고객이 기록한 표시 코드 {reported_code}" if reported_code else "고객이 기록한 증상"
+    basis = (f"고객이 기록한 표시 문구 ‘{case.display_label}’" if case.display_label else
+             f"고객이 기록한 표시 코드 {reported_code}" if reported_code else "고객이 기록한 증상")
     matches = {key for key, pattern in SYMPTOM_MANUAL_SECTIONS if pattern.search(symptom)}
     if observed_hose_conditions(symptom):
         matches.add("OE")
@@ -36,9 +37,13 @@ def assessment_for(case: Case, symptom: str) -> dict:
     if case.service_reason == "safety_concern":
         return {**findings, "title": "안전 점검 필요", "explanation": "기록된 증상은 기사 점검이 필요해요.",
                 "basis": "증상 기록에 안전 점검이 필요한 내용이 포함되어 있어요."}
-    if case.category != "washer" or code not in WASHER_CAUSES or not case.model or not explain_alert(case.model, code):
+    if case.category != "washer" or code not in WASHER_CAUSES or not case.model or not explain_alert(case.model, code, archive):
         return {**findings, "title": "가능한 원인을 좁히기 어려워요",
                 "explanation": "현재 확인된 모델과 코드 또는 증상만으로는 원인을 구분하기 어려워요.", "basis": basis}
+    if not explain_alert(case.model, code):
+        findings["manual_note"] = explain_alert(case.model, code, archive)
+    else:
+        findings["source_url"] = LG_SUPPORT
     related = {"DL": {"DE"}, "E3": {"OE"}, "FF": {"OE", "IE"}}
     compatible = {code} | related.get(code, set())
     if reported_code and matches and matches - compatible:
@@ -46,7 +51,6 @@ def assessment_for(case: Case, symptom: str) -> dict:
             **findings, "title": "코드와 증상을 함께 점검해야 해요",
             "explanation": "입력하신 증상에 표시 코드만으로 설명하기 어려운 내용이 있어요. 두 정보를 함께 확인해야 원인을 좁힐 수 있어요.",
             "basis": basis + "와 직접 입력한 증상을 매뉴얼 항목과 대조했어요.",
-            "source_url": LG_SUPPORT,
         }
     if reported_code and matches:
         basis += "와 입력한 증상이 같은 매뉴얼 점검 항목에 해당해요."
@@ -55,19 +59,20 @@ def assessment_for(case: Case, symptom: str) -> dict:
     elif not reported_code:
         basis = "입력한 증상과 일치하는 매뉴얼 점검 항목을 참고했어요."
     title, explanation = WASHER_CAUSES[code]
-    return {**findings, "title": title, "explanation": explanation, "basis": basis, "source_url": LG_SUPPORT}
+    return {**findings, "title": title, "explanation": explanation, "basis": basis}
 
 
-def customer_report(case: Case) -> dict:
+def customer_report(case: Case, archive=None) -> dict:
     request = case.service_request or {}
     symptom = case.service_detail or " / ".join(case.symptoms)
     return {
         "case_id": case.case_id,
         "model": case.model,
         "error_code": case.error_code,
+        "display_label": case.display_label,
         "display_code_status": case.display_code_status,
         "symptom": symptom,
-        "assessment": assessment_for(case, symptom),
+        "assessment": assessment_for(case, symptom, archive),
         "first_observed": case.report_details.get("first_observed"),
         "cycle_stage": case.report_details.get("cycle_stage"),
         "frequency": case.report_details.get("frequency"),
@@ -75,7 +80,7 @@ def customer_report(case: Case) -> dict:
                              if item["result"] in {"confirmed", "already_reported"}
                              and item.get("symptom_revision", 0) == case.symptom_revision],
         "manual_references": list(dict.fromkeys(
-            f"{item['source']['document_id']} PDF {item['source']['pdf_page']}쪽"
+            f"{item['source']['document_id']} {source_location(item['source'])}"
             for item in [*case.checks, *case.actions] if item.get("source")
         )),
         "actions": [{"description": item["instruction"], "result": item["result"],
@@ -86,11 +91,11 @@ def customer_report(case: Case) -> dict:
     }
 
 
-def technician_report(case: Case) -> dict:
+def technician_report(case: Case, archive=None) -> dict:
     """Internal projection for a future authenticated technician service."""
     return {
         "schema_version": 1,
-        "summary": customer_report(case),
+        "summary": customer_report(case, archive),
         "device": {"id": case.device_id, "name": case.device_name, "category": case.category},
         "created_at": case.created_at,
         "updated_at": case.updated_at,

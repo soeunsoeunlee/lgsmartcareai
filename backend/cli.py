@@ -11,14 +11,14 @@ SERVICE_OFFER = "자가조치 안내 근거를 찾지 못했습니다. A/S 상�
 
 
 def local_search(args: argparse.Namespace) -> int:
-    from manual_search import MANUALS, search_oe
+    from manual_search import has_manual, search_oe
     from pymupdf import FileDataError
 
     model = args.model
     while not model or not model.strip():
         model = input("제품 라벨에서 ‘모델명’ 값을 찾아 입력해 주세요: ")
     model = model.strip().upper()
-    if model not in MANUALS:
+    if not has_manual(args.archive, model):
         print("이 모델의 매뉴얼은 아직 등록되지 않았습니다. A/S 상담을 권장합니다.")
         return 0
     error_code = args.error or input("제품 화면에 표시된 에러코드를 입력해 주세요: ")
@@ -35,7 +35,8 @@ def local_search(args: argparse.Namespace) -> int:
         print(SERVICE_OFFER)
         return 0
     for page, excerpt in results:
-        print(f"\n{model} | {document_id} | PDF {page}쪽\n{excerpt}")
+        reference = f"PDF {page}쪽" if isinstance(page, int) else f"HTML 도움말 {page}"
+        print(f"\n{model} | {document_id} | {reference}\n{excerpt}")
     return 0
 
 

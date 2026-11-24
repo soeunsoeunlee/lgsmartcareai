@@ -3,6 +3,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pymupdf
+from manual_catalog import catalog_for, catalog_rows
 
 
 MANUALS = {
@@ -37,7 +38,46 @@ ALERT_SUMMARIES = {
 }
 
 
-def explain_alert(model: str, code: str) -> str | None:
+def available_models(archive: Path) -> list[str]:
+    try:
+        return list(dict.fromkeys([*MANUALS, *catalog_for(archive)]))
+    except (OSError, ValueError, BadZipFile):
+        return list(MANUALS)
+
+
+def has_manual(archive: Path, model: str | None) -> bool:
+    return bool(model and (model in MANUALS or model in available_models(archive)))
+
+
+def alerts_for(archive: Path, model: str) -> list[str]:
+    if model in MANUALS:
+        return list(MANUAL_ALERTS)
+    try:
+        entry = catalog_for(archive).get(model)
+    except (OSError, ValueError, BadZipFile):
+        return []
+    if not entry:
+        return []
+    canonical = {label.upper(): label for label in MANUAL_ALERTS}
+    return [location[0][1] if re.search(r"[가-힣]", location[0][1]) else canonical.get(code, code)
+            for code, location in entry[2].items()]
+
+
+def source_location(source: dict) -> str:
+    if source.get("pdf_page"):
+        return f"PDF {source['pdf_page']}쪽"
+    return f"HTML 도움말 {source['html_topic']}"
+
+
+def explain_alert(model: str, code: str, archive: Path | None = None) -> str | None:
+    if model not in MANUALS and archive:
+        entry = catalog_for(archive).get(model)
+        locations = entry[2].get(code) if entry else None
+        if not locations:
+            return None
+        location, label = locations[0]
+        reference = f"PDF {location}쪽" if isinstance(location, int) else f"HTML 도움말 {location}"
+        return f"{code} · 해당 모델 매뉴얼의 ‘{label}’ 항목에 해당해요. ({entry[1]} {reference})"
     if model not in ALERT_PAGES or code not in ALERT_SUMMARIES:
         return None
     summary, page_index = ALERT_SUMMARIES[code]
@@ -71,12 +111,44 @@ REVIEWED_ALERT_STEPS = {
     "FF": (("warm_drain_hose", "배수 호스가 얼어 있는지 확인할 수 있나요?",
             r"배수 호스가 언 경우 따뜻한 물을 적신 수건을 감싸 녹여?\s*(?:주세요|이세요)\."),),
 }
+EXTENDED_OE_STEPS = (
+    ("lower_hose", "배수 호스가 올려져 있나요?", r"배수 호스를 내리(?:세요|고 다시 작동해 주세요)\.|배수 호스를 내려주세요\."),
+    ("straighten_hose", "배수 호스가 꺾여 있거나 문턱이 높아 내부가 막혀 있나요?",
+     r"배수 호스가 꺾여 굴곡이 생기면 이물질로 인해서 배수가 되지 않으므로 바닥이 고른 장 ?소에 바르게 놓으세요\."),
+    ("lower_hose", "배수 호스가 올려져 있습니까?", r"배수 호스를 내리십시오\."),
+    ("straighten_hose", "배수 호스가 꺾여 있거나 문턱이 높아 내부가 막혀 있습니까?",
+     r"배수 호스가 꺾여 굴곡이 생기면 이물질로 인 ?해서 배수가 되지 않으므로 바닥이 고른 장소 ?에 바르게 놓으십시오\."),
+)
+LEGACY_ALERT_STEPS = {
+    "IE": (("open_tap", "수도꼭지가 잠겨 있습니까?", r"수도꼭지를 트십시오\."),
+           ("straighten_inlet", "급수 호스가 꺾여 있습니까?", r"급수 호스가 꺾이지 않도록 펴십시오\.")),
+}
 ROW_MARKER = re.compile(r"^(?:UE|IE|OE|dE|dL|LE1|LE~1~LE~1|\[L|LE FE tE AE FF E3|tcL|tc ~ L ~ tc ~ L|증상)$", re.MULTILINE)
 ROW_ALIASES = {"[L": "CL", "LE~1~LE~1": "LE1", "tc ~ L ~ tc ~ L": "TCL"}
 WINTER_PAGES = {"T25OZ0": 36, "TR14WK1": 28, "TR13ML2": 30, "TR16DV6": 27}
 
 
 def reviewed_alert_steps(archive: Path, model: str, code: str) -> list[dict]:
+    if model not in MANUALS:
+        entry = catalog_for(archive).get(model)
+        if not entry:
+            return []
+        rules = EXTENDED_OE_STEPS if code == "OE" else (*REVIEWED_ALERT_STEPS.get(code, ()), *LEGACY_ALERT_STEPS.get(code, ()))
+        actions = {}
+        for location, _, body in catalog_rows(archive, entry, code):
+            text = " ".join(body.split())
+            for action_id, question, pattern in rules:
+                _, marker, remainder = text.partition(question)
+                # A rule can be used only if its question and reviewed action occur in the same row.
+                match = re.search(pattern.replace("UE를", "(?:UE|에러)를"), remainder.partition("?")[0]) if marker else None
+                if not match:
+                    continue
+                source = {"manual_name": f"LG 세탁기 사용설명서 {model}", "filename": entry[0],
+                          "document_id": entry[1], "excerpt": f"{question}\n{match.group()}"}
+                source["pdf_page" if isinstance(location, int) else "html_topic"] = location
+                actions.setdefault(action_id, {"action_id": action_id, "condition": question,
+                                               "instruction": match.group(), "source": source})
+        return list(actions.values())
     rules = REVIEWED_ALERT_STEPS.get(code)
     if not rules:
         return []
@@ -117,7 +189,10 @@ def reviewed_alert_steps(archive: Path, model: str, code: str) -> list[dict]:
     return actions
 
 
-def search_oe(archive: Path, model: str) -> tuple[str, list[tuple[int, str]]]:
+def search_oe(archive: Path, model: str) -> tuple[str, list[tuple[int | str, str]]]:
+    if model not in MANUALS:
+        entry = catalog_for(archive)[model]
+        return entry[1], [(location, f"{label}\n{body}") for location, label, body in catalog_rows(archive, entry, "OE")]
     filename, document_id = MANUALS[model]
     with ZipFile(archive) as manuals:
         pdf = manuals.read(filename)
