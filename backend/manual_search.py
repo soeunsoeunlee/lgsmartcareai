@@ -64,6 +64,8 @@ def alerts_for(archive: Path, model: str) -> list[str]:
 
 
 def source_location(source: dict) -> str:
+    if source.get("source_url"):
+        return source["source_url"]
     if source.get("pdf_page"):
         return f"PDF {source['pdf_page']}쪽"
     return f"HTML 도움말 {source['html_topic']}"

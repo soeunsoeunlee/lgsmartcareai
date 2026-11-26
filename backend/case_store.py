@@ -27,6 +27,9 @@ class Case:
     symptoms: list[str] = field(default_factory=list)
     error_code: str | None = None
     display_label: str | None = None
+    washer_type: str | None = None
+    guidance_mode: str = "hybrid"
+    guidance_match: str | None = None
     status: str = "collecting"
     service_reason: str | None = None
     service_consent_at: str | None = None

@@ -1,7 +1,8 @@
+import json
 import os
 from enum import Enum
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 
 class DemoTurn(Enum):
@@ -43,3 +44,33 @@ def generate_answer(*, turn: DemoTurn = DemoTurn.START) -> str:
     if not answer or response.status != "completed":
         raise ValueError("완료된 답변을 받지 못했습니다.")
     return answer
+
+
+def rank_public_support(topic: str, candidate_ids: tuple[str, ...]) -> list[str]:
+    """Rank pre-approved public guidance. Ignore any text outside candidate IDs."""
+    from support_knowledge import RULES
+
+    cards = {key: {"condition": RULES[key][-2], "instruction": RULES[key][-1]}
+             for key in candidate_ids if key in RULES and RULES[key][1] == topic}
+    if not cards:
+        return []
+    try:
+        with OpenAI(timeout=6, max_retries=0) as client:
+            response = client.responses.create(
+                model=os.environ.get("OPENAI_MODEL") or "gpt-4.1-mini", store=False,
+                instructions=(
+                    "세탁기 지원 자료를 증상 분류에 맞춰 판단한다. "
+                    "위험이 적고 확인하기 쉬운 순서로 제공된 ID를 배열에 넣으세요. "
+                    "JSON 객체 {\"order\":[\"id\"]}만 출력하세요. 새 ID나 조치 문구는 작성하지 마세요."
+                ),
+                input="Return JSON only.\n" + json.dumps({"topic": topic, "public_support": cards}, ensure_ascii=False),
+                text={"format": {"type": "json_object"}},
+                max_output_tokens=160,
+            )
+        if response.status == "completed":
+            order = json.loads(response.output_text).get("order", [])
+            if isinstance(order, list):
+                return [key for key in order if isinstance(key, str) and key in cards]
+    except (OpenAIError, ValueError, AttributeError):
+        pass
+    return []

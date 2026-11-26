@@ -1,8 +1,12 @@
 const ui = Object.fromEntries([...document.querySelectorAll("[id]")].map(element => [element.id, element]));
 const browserKey = "smartcare.browserId";
+const manualOnly = new URLSearchParams(window.location.search).get("manual_only") === "1";
 const browserId = localStorage.getItem(browserKey) || crypto.randomUUID();
 localStorage.setItem(browserKey, browserId);
 const categories = {washer: "세탁기", air_conditioner: "에어컨", dryer: "건조기", other: "기타 가전"};
+const washerTypeChoices = {front_loader: "LG 드럼 세탁기", top_loader: "LG 통돌이 세탁기",
+  wash_tower: "LG 워시타워", mini_washer: "LG 미니세탁기", unknown: "유형도 확인 어려움"};
+const washerTypes = {...washerTypeChoices, wash_combo: "LG 워시콤보"};
 const deviceKey = "smartcare.devices";
 const devices = JSON.parse(localStorage.getItem(deviceKey) || "[]");
 const legacyModel = localStorage.getItem("smartcare.washerModel");
@@ -43,7 +47,12 @@ function show(panel) {
 }
 
 const guidePhotos = {
+  "washer-model-label": "LG 통돌이 세탁기에서 모델명이 표시되는 라벨 위치입니다. 라벨의 위치와 모양은 제품마다 달라요.",
   "washer-error-display": "세탁기 조작부의 디지털 표시창에 OE가 표시된 예시입니다. 표시창의 위치는 모델에 따라 다를 수 있어요.",
+  "washer-error-display-front": "드럼 세탁기 표시창에 OE가 표시된 예시입니다. 표시창 위치는 모델마다 다를 수 있어요.",
+  "washer-error-display-tower": "워시타워의 세탁기 조작부에 OE가 표시된 예시입니다. 표시창 위치는 모델마다 다를 수 있어요.",
+  "washer-error-display-mini": "미니세탁기 조작부에 OE가 표시된 예시입니다. 표시창 위치는 모델마다 다를 수 있어요.",
+  "washer-error-display-combo": "워시콤보 조작부에 OE가 표시된 예시입니다. 표시창 위치는 모델마다 다를 수 있어요.",
   "drain-hose-down": "세탁기 뒤 배수 호스를 바닥 쪽으로 내린 모습입니다.",
   "drain-hose-straight": "배수 호스가 눌리거나 꺾이지 않게 완만하게 놓인 모습입니다.",
   "balance-laundry": "세탁물이 한쪽에 몰리지 않도록 세탁통에 고르게 편 모습입니다.",
@@ -54,15 +63,39 @@ const guidePhotos = {
 function appendMessage(text, customer = false, illustration) {
   const message = document.createElement("div");
   message.className = customer ? "message customer" : "message";
-  message.textContent = text;
+  if (customer) {
+    message.textContent = text;
+  } else {
+    const parts = text.split(/(https:\/\/www\.lge\.co\.kr\/support\/solutions-\d+)/g);
+    parts.forEach((part, index) => {
+      if (index % 2 === 0) message.append(part);
+      else {
+        const link = document.createElement("a");
+        link.href = part;
+        link.textContent = "LG전자 공식 도움말";
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        message.append(link);
+      }
+    });
+  }
   if (!customer && Object.hasOwn(guidePhotos, illustration)) {
     const figure = document.createElement("figure");
     figure.className = "guide-photo";
     const photo = document.createElement("img");
-    photo.src = "/guides/" + illustration + ".png";
+    const officialLabel = illustration === "washer-model-label";
+    photo.src = officialLabel ? "/guides/washer-model-label-official.jpg" : "/guides/" + illustration + ".png";
     photo.alt = guidePhotos[illustration];
     const caption = document.createElement("figcaption");
-    caption.textContent = "생성 예시 사진 · " + photo.alt;
+    caption.textContent = (officialLabel ? "" : "생성 예시 사진 · ") + photo.alt;
+    if (officialLabel) {
+      const source = document.createElement("a");
+      source.href = "https://www.lge.co.kr/support/solutions-1006687";
+      source.target = "_blank";
+      source.rel = "noopener noreferrer";
+      source.textContent = "LG전자 공식 모델명 확인 안내";
+      caption.append(" ", source);
+    }
     photo.onerror = () => figure.remove();
     figure.append(photo, caption);
     message.append(figure);
@@ -76,17 +109,25 @@ function showReply(data) {
   renderSavedReport(data);
   renderCustomerReport(data.customer_report);
   const history = data.related_count ? " · 같은 기기 이전 상담 " + data.related_count + "건" : "";
-  ui["current-model"].textContent = [categories[data.category], data.device_name, data.model]
+  ui["current-model"].textContent = [categories[data.category], data.device_name, data.model || washerTypes[data.washer_type]]
     .filter((value, index, values) => value && values.indexOf(value) === index).join(" · ") + history;
+  if (data.model_picker && supportedModels.length) {
+    ui["current-model"].textContent = "매뉴얼이 연결된 세탁기 모델 " + supportedModels.length + "개";
+  }
   const reply = data.message ? appendMessage(data.message, false, data.illustration) : ui.transcript.lastElementChild;
   const choices = Array.isArray(data.choices) ? data.choices : [];
   const expectsReply = ["collecting", "checking_condition", "awaiting_action_result", "service_offered"].includes(data.status);
   // A server started before a frontend update may still use the older response format.
-  ui["chat-form"].hidden = !expectsReply || choices.length > 0;
+  const modelPicker = data.model_picker === true;
+  ui["chat-form"].hidden = !modelPicker && (!expectsReply || choices.length > 0);
+  ui["chat-input"].placeholder = modelPicker ? "모델명으로 검색하거나 제품 라벨의 모델명을 입력해 주세요" : "답변을 입력해 주세요";
+  if (modelPicker) ui["chat-input"].setAttribute("list", "supported-models");
+  else ui["chat-input"].removeAttribute("list");
   ui.choices.replaceChildren();
   ui.choices.hidden = choices.length === 0;
   if (choices.length) {
-    for (const choice of [...choices, "직접 입력"]) {
+    const options = modelPicker || data.status === "choosing_washer_type" ? choices : [...choices, "직접 입력"];
+    for (const choice of options) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "choice-bubble";
@@ -152,7 +193,7 @@ function renderCustomerReport(report) {
   const results = {resolved: "자가조치로 해결", service_submitted: "A/S 접수 신청 저장 · 방문 일정 확정 전",
     service_declined: "A/S 신청 없이 상담 종료"};
   const details = [
-    ["제품 모델", report.model || "미확인"],
+    ["제품 모델", report.model || report.washer_type || "미확인"],
     ["에러코드·표시 문구", report.display_label || report.error_code || (report.display_code_status === "not_displayed" ? "표시 없음" : "미확인")],
     ["신고한 증상", report.symptom || "기록 없음"],
     ["처음 발생", report.first_observed],
@@ -343,14 +384,17 @@ function chooseDevice(category) {
 function createCase(category, device) {
   return run(async () => {
     const data = await post("/api/cases", {category, model: device?.model || null,
-      device_id: device?.id || null, device_name: device?.name || null});
+      device_id: device?.id || null, device_name: device?.name || null,
+      washer_type: device?.washer_type || null,
+      guidance_mode: manualOnly ? "manual_only" : "hybrid"});
     if (device) appendMessage(deviceLabel(device), true);
     showReply(data);
   });
 }
 
 function deviceLabel(device) {
-  return device.name === device.model ? device.model : device.name + " · " + device.model;
+  const model = device.model || washerTypes[device.washer_type] || "모델 미확인";
+  return device.name === model ? model : device.name + " · " + model;
 }
 
 ui["device-tab"].onclick = () => show("device");
@@ -360,6 +404,25 @@ ui["new-chat"].onclick = () => startChat(true);
 for (const [key, label] of Object.entries(categories)) {
   ui["device-category"].add(new Option(label, key));
 }
+ui["device-washer-type"].add(new Option("세탁기 유형을 선택해 주세요", ""));
+for (const [key, label] of Object.entries(washerTypeChoices)) {
+  ui["device-washer-type"].add(new Option(label, key));
+}
+
+function updateDeviceModelFields() {
+  const washer = ui["device-category"].value === "washer";
+  const unknown = washer && ui["device-model-unknown"].checked;
+  ui["model-unknown-label"].hidden = !washer;
+  ui["device-model-field"].hidden = unknown;
+  ui["model-input"].disabled = unknown;
+  ui["model-input"].required = !unknown;
+  ui["device-washer-type-field"].hidden = !unknown;
+  ui["device-washer-type"].disabled = !unknown;
+  ui["device-washer-type"].required = unknown;
+}
+ui["device-category"].onchange = updateDeviceModelFields;
+ui["device-model-unknown"].onchange = updateDeviceModelFields;
+updateDeviceModelFields();
 
 function renderDevices() {
   ui["device-list"].replaceChildren();
@@ -374,19 +437,20 @@ function renderDevices() {
 
 ui["device-form"].onsubmit = event => {
   event.preventDefault();
-  const value = ui["model-input"].value.trim().toUpperCase();
-  if (!/^[A-Z0-9.-]{2,40}$/.test(value)) {
+  const type = ui["device-washer-type"].disabled ? null : ui["device-washer-type"].value;
+  const value = type ? null : ui["model-input"].value.trim().toUpperCase();
+  if (!type && !/^[A-Z0-9.-]{2,40}$/.test(value)) {
     ui["device-status"].textContent = "제품 라벨의 모델명을 확인해 주세요.";
     return;
   }
   const category = ui["device-category"].value;
-  const name = ui["device-name"].value.trim() || value;
-  if (devices.some(device => device.category === category && device.model === value && device.name === name)) {
+  const name = ui["device-name"].value.trim() || value || washerTypes[type];
+  if (devices.some(device => device.category === category && device.model === value && device.washer_type === (type || undefined) && device.name === name)) {
     ui["device-status"].textContent = "이미 등록한 기기입니다. 같은 모델이 여러 대라면 별명을 다르게 입력해 주세요.";
     return;
   }
   try {
-    const device = {id: crypto.randomUUID(), category, model: value, name};
+    const device = {id: crypto.randomUUID(), category, model: value, name, ...(type ? {washer_type: type} : {})};
     localStorage.setItem(deviceKey, JSON.stringify([...devices, device]));
     devices.push(device);
   } catch {
@@ -396,12 +460,12 @@ ui["device-form"].onsubmit = event => {
   ui["model-input"].value = "";
   ui["device-name"].value = "";
   renderDevices();
-  ui["device-status"].textContent = category === "washer" && supportedModels.includes(value)
+  ui["device-status"].textContent = type ? washerTypes[type] + " 유형으로 저장했어요." : category === "washer" && supportedModels.includes(value)
     ? value + " 모델을 저장했어요."
     : value + " 모델을 저장했어요. 등록된 자가조치 매뉴얼이 없으면 A/S를 안내합니다.";
 };
 
-const statusNames = {collecting: "상담 중", checking_condition: "점검 중", awaiting_action_result: "조치 결과 확인 중",
+const statusNames = {collecting: "상담 중", choosing_washer_type: "제품 유형 확인 중", checking_condition: "점검 중", awaiting_action_result: "조치 결과 확인 중",
   resolved: "해결됨", collecting_report: "증상 기록 중", collecting_attachments: "증상 자료 첨부 중", service_offered: "A/S 의사 확인 중",
   service_requested: "방문 일정 입력 전", service_submitted: "A/S 신청 저장", service_declined: "상담 종료"};
 const formatTime = new Intl.DateTimeFormat("ko-KR", {dateStyle: "medium", timeStyle: "short"});
@@ -434,7 +498,7 @@ ui["history-tab"].onclick = async () => {
       const row = document.createElement("li");
       const info = document.createElement("div");
       const name = document.createElement("strong");
-      name.textContent = [categories[item.category], item.device_name, item.model, item.display_label || item.error_code]
+      name.textContent = [categories[item.category], item.device_name, item.model || washerTypes[item.washer_type], item.display_label || item.error_code]
         .filter((value, index, values) => value && values.indexOf(value) === index).join(" · ");
       const dates = document.createElement("p");
       dates.className = "hint";
@@ -785,6 +849,7 @@ api("/api/models").then(data => {
   supportedModels = data.models;
   ui["supported-models"].replaceChildren(...supportedModels.map(model => new Option(model, model)));
   ui.supported.textContent = "매뉴얼이 연결된 세탁기 모델 " + supportedModels.length + "개";
+  if (currentCase?.model_picker) ui["current-model"].textContent = ui.supported.textContent;
 }).catch(() => {});
 renderDevices();
 startChat();

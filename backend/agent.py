@@ -7,9 +7,31 @@ from pymupdf import FileDataError
 from case_store import Case, now
 from manual_catalog import LABEL_CODES
 from manual_search import MANUALS, explain_alert, has_manual, reviewed_alert_steps, search_oe, source_location
+from support_knowledge import appliance_type, official_code_reference, official_support_steps
 
 
 MODEL_LABEL = "제품 라벨에서 ‘모델명’으로 표시된 값을 확인해 알려주시겠어요?"
+WASHER_TYPE_CHOICES = {"front_loader": "LG 드럼 세탁기", "top_loader": "LG 통돌이 세탁기",
+                       "wash_tower": "LG 워시타워", "mini_washer": "LG 미니세탁기",
+                       "unknown": "유형도 확인 어려움"}
+WASHER_TYPES = {**WASHER_TYPE_CHOICES, "wash_combo": "LG 워시콤보"}
+DISPLAY_ILLUSTRATIONS = {
+    "top_loader": "washer-error-display",
+    "front_loader": "washer-error-display-front",
+    "wash_tower": "washer-error-display-tower",
+    "mini_washer": "washer-error-display-mini",
+    "wash_combo": "washer-error-display-combo",
+}
+TOP_LOADER_ACTION_ILLUSTRATIONS = {
+    "lower_hose": "drain-hose-down",
+    "straighten_hose": "drain-hose-straight",
+    "balance_load": "balance-laundry",
+    "spread_tangled_load": "balance-laundry",
+    "close_door": "washer-door",
+    "reclose_door": "washer-door",
+    "open_tap": "inlet-tap",
+}
+WASHER_TYPE_PROMPT = "모델명을 몰라도 괜찮아요. 사용 중인 세탁기 유형을 골라 주세요."
 VISIT_PROMPT = "기사님이 방문해서 제품을 점검하도록 신청할까요? ‘네’ 또는 ‘아니요’로 알려주세요."
 CODE_PROMPT = "세탁기 조작부의 디지털 표시창에 에러코드가 있나요? 없으면 ‘코드 없음’이라고 답해 주세요."
 OUTCOME_PROMPT = (
@@ -19,7 +41,7 @@ OUTCOME_PROMPT = (
 TERMINAL_STATES = {"resolved", "service_requested", "service_submitted", "service_declined"}
 MODEL_PATTERN = re.compile(r"(?<![A-Z0-9])[A-Z]{1,3}[0-9][A-Z0-9-]{3,}(?![A-Z0-9])", re.I | re.ASCII)
 CODE_PATTERN = re.compile(
-    r"(?<![A-Z0-9])(?:[A-Z]E|DL|CL|\[L|FF|TCL|[A-Z]{1,2}[0-9]{1,2})(?![A-Z0-9])",
+    r"(?<![A-Z0-9])(?:[A-Z]E|DL|CL|\[L|FF|PF|VS|US|TC[L]?|[A-Z]{1,2}[0-9]{1,2})(?![A-Z0-9])",
     re.I | re.ASCII,
 )
 HAZARD = re.compile(
@@ -50,6 +72,7 @@ SYMPTOM_MANUAL_SECTIONS = (
     ("OE", re.compile(r"배수.{0,12}(?:안\s*돼|안\s*되|멈|못)|물이\s*(?:안\s*빠|빠지지)")),
     ("IE", re.compile(r"급수.{0,12}(?:안\s*돼|안\s*되|멈|못)|물이\s*(?:안\s*들어|들어오지)")),
     ("DE", re.compile(r"(?:문|뚜껑).{0,10}(?:안\s*닫|닫히지)")),
+    ("DOOR_LOCKED", re.compile(r"(?:문|도어|서랍|뚜껑).{0,10}(?:안\s*열|열리지)")),
     ("UE", re.compile(r"세탁물.{0,12}(?:한쪽.{0,8}치우|뭉쳤|뭉쳐)")),
 )
 
@@ -105,6 +128,9 @@ class SelfCareAgent:
             if self.case.category != "washer" and self.case.model:
                 self.case.status = "collecting_report"
                 return self.reply(f"{self.case.model}의 증상을 기록해 주세요. 이 제품 유형의 자가조치 매뉴얼은 아직 등록되지 않았어요.")
+            if self.case.washer_type and not self.case.model:
+                self.asked_code = True
+                return self.reply(f"등록한 제품 유형은 {WASHER_TYPES[self.case.washer_type]}예요. " + CODE_PROMPT)
             if not self.case.model:
                 self.asked_model = True
                 return self.reply(MODEL_LABEL)
@@ -114,25 +140,26 @@ class SelfCareAgent:
             return self.reply(f"등록된 {self.case.model} 세탁기로 상담을 시작합니다. 증상이나 화면의 에러코드를 알려주세요.")
         return self.reply("세탁기에 어떤 문제가 있나요? 증상이나 화면의 에러코드를 알려주세요.")
 
+    def image_washer_type(self) -> str | None:
+        if self.case.washer_type:
+            return self.case.washer_type
+        if self.case.model and self.archive.is_file():
+            return appliance_type(self.archive, self.case.model, self.archive.stat().st_mtime_ns)
+        return None
+
     def reply(self, message: str) -> str:
         self.case.add_message("agent", message)
         if self.web and self.case.category == "washer":
             illustration = None
-            if CODE_PROMPT in message and self.case.status == "collecting":
-                illustration = "washer-error-display"
+            if message == MODEL_LABEL and self.case.status == "collecting":
+                illustration = "washer-model-label"
+            elif CODE_PROMPT in message and self.case.status == "collecting":
+                illustration = DISPLAY_ILLUSTRATIONS.get(self.image_washer_type())
             elif self.case.status == "awaiting_action_result" and self.case.actions:
                 action = self.case.actions[-1]
                 # Attach a photo only to the actual instruction, not to later result prompts.
-                if action["instruction"] in message:
-                    illustration = {
-                        "lower_hose": "drain-hose-down",
-                        "straighten_hose": "drain-hose-straight",
-                        "balance_load": "balance-laundry",
-                        "spread_tangled_load": "balance-laundry",
-                        "close_door": "washer-door",
-                        "reclose_door": "washer-door",
-                        "open_tap": "inlet-tap",
-                    }.get(action["action_id"])
+                if action["instruction"] in message and self.image_washer_type() == "top_loader":
+                    illustration = TOP_LOADER_ACTION_ILLUSTRATIONS.get(action["action_id"])
             if illustration:
                 self.case.messages[-1]["illustration"] = illustration
         return message
@@ -143,6 +170,14 @@ class SelfCareAgent:
             return self.reply("이 상담은 종료되었습니다.")
         if self.case.status == "collecting_report":
             return self.reply("아래 양식에 상세 증상을 기록해 주세요.")
+        if self.case.status == "choosing_washer_type":
+            for kind, name in WASHER_TYPE_CHOICES.items():
+                if text == name:
+                    self.case.washer_type = kind
+                    self.case.status = "collecting"
+                    self.asked_code = True
+                    return self.reply(CODE_PROMPT)
+            return self.reply(WASHER_TYPE_PROMPT)
         if self.case.status == "service_offered":
             answer = text.strip(" .!?")
             if answer in {"네", "예", "응", "웅", "연결해 주세요", "연결해주세요"}:
@@ -182,7 +217,7 @@ class SelfCareAgent:
             return "현재 상담은 선택한 기기로 진행 중이에요. 다른 기기라면 새 상담에서 선택해 주세요."
         if len(models) == 1:
             case.model = models.pop()
-        elif self.web and not case.model and re.fullmatch(r"[A-Z0-9.-]{2,40}", text, re.I | re.ASCII):
+        elif self.web and not case.model and not self.asked_code and re.fullmatch(r"[A-Z0-9.-]{2,40}", text, re.I | re.ASCII):
             case.model = text.upper()
         codes = {code.upper() for code in CODE_PATTERN.findall(text)}
         if self.web and self.asked_code and text in LABEL_CODES:
@@ -204,8 +239,11 @@ class SelfCareAgent:
         symptom = MODEL_PATTERN.sub("", text).strip()
         if symptom and not re.fullmatch(r"(?:모델(?:명)?\s*(?:은|이)?\s*)?(?:이에요|예요|입니다)?[.! ]*", symptom):
             case.symptoms.append(text)
-        if not case.model:
+        if not case.model and not case.washer_type:
             if self.web and text == "모델명 확인 어려움":
+                if case.category == "washer":
+                    case.status = "choosing_washer_type"
+                    return WASHER_TYPE_PROMPT
                 if self.no_displayed_code:
                     case.status = "collecting_report"
                     return "에러코드 없이 증상을 판단할게요. 모델명은 미확인으로 두고 상세 증상을 기록해 주세요."
@@ -232,13 +270,14 @@ class SelfCareAgent:
         if self.web and case.error_code is None and not self.asked_code:
             self.asked_code = True
             return CODE_PROMPT
-        if self.web and not has_manual(self.archive, case.model):
+        if self.web and case.model and not has_manual(self.archive, case.model):
             case.status = "collecting_report"
             return f"{case.model} 모델의 매뉴얼은 아직 등록되지 않았어요. 서비스센터가 확인할 증상을 기록해 주세요."
         if self.web and case.error_code:
-            explanation = explain_alert(case.model, case.error_code, self.archive)
+            explanation = explain_alert(case.model, case.error_code, self.archive) if case.model else None
             if explanation is None:
-                explanation = f"{case.error_code} · 이 모델의 매뉴얼에서 코드의 의미를 확인하지 못했어요."
+                explanation = (f"{case.error_code} · 이 모델의 매뉴얼에서 코드의 의미를 확인하지 못했어요."
+                               if case.model else f"표시된 코드 {case.error_code}를 기록했어요. 선택한 세탁기 유형의 공식 안내를 확인할게요.")
             return explanation + "\n" + self.manual_guidance(" ".join(case.symptoms))
         if case.model not in MANUALS:
             return self.offer_service("unregistered_model", f"{case.model} 모델의 매뉴얼은 아직 등록되지 않았어요.")
@@ -351,8 +390,9 @@ class SelfCareAgent:
         self.condition = action
         self.case.status = "checking_condition"
         source = action["source"]
+        introduction = "LG전자 공식 도움말을 바탕으로 확인할게요." if source.get("source_url") else "매뉴얼에 따라 먼저 확인할게요."
         return (
-            f"매뉴얼에 따라 먼저 확인할게요. {action['condition']}\n"
+            f"{introduction} {action['condition']}\n"
             f"출처: {source['manual_name']} ({source['document_id']}), {source_location(source)}\n"
             "‘네’, ‘아니요’, ‘확인 어려워요’ 중 하나로 알려주세요."
         )
@@ -420,18 +460,42 @@ class SelfCareAgent:
                     self.pending = reviewed_alert_steps(self.archive, self.case.model, section)
             except (OSError, KeyError, BadZipFile, FileDataError, IndexError):
                 self.pending = []
-            if self.pending:
-                return "매뉴얼에 나온 점검 항목을 하나씩 확인할게요.\n" + self.next_action()
+        if self.web and self.case.category == "washer" and self.case.guidance_mode == "hybrid":
+            support, match = official_support_steps(
+                self.archive, self.case.model, section or ("OE" if observed else None), detail,
+                washer_type=self.case.washer_type,
+            )
+            self.case.guidance_match = match
+            for extra in support:
+                if extra["action_id"] in {"top_drain_position", "front_drain_position"}:
+                    existing = next((item for item in self.pending if item["action_id"] == "straighten_hose"), None)
+                    if existing:
+                        existing["supplement"] = extra
+                        continue
+                self.pending.append(extra)
+            if support:
+                mode = "OpenAI 매칭" if match == "openai" else "로컬 매칭"
+                return f"LG전자 공식 지원 자료에서 관련 항목을 찾았어요. ({mode})\n" + self.next_action()
+        if self.pending:
+            return "매뉴얼에 나온 점검 항목을 하나씩 확인할게요.\n" + self.next_action()
+        guidance = "적용할 수 있는 자가조치 근거를 찾지 못했어요."
+        if self.web and self.case.category == "washer" and self.case.guidance_mode == "hybrid" and code:
+            link = official_code_reference(self.archive, self.case.model, code, self.case.washer_type)
+            if link:
+                guidance += f"\n같은 제품 유형과 표시 코드를 다루는 공식 도움말도 확인할 수 있어요. {link}"
         return self.request_report_or_service(
-            "no_matching_evidence", "적용할 수 있는 자가조치 근거를 찾지 못했어요."
+            "no_matching_evidence", guidance
         )
 
     def describe(self, action: dict, *, repeat: bool = False) -> str:
         source = action["source"]
         step = sum(item.get("symptom_revision", 0) == self.case.symptom_revision for item in self.case.actions)
         label = "직전 안내" if repeat else f"자가조치 {step}단계"
+        supplement = action.get("supplement")
+        extra = (f"\nLG전자 공식 도움말 보충 안내: {supplement['instruction']}\n"
+                 f"출처: {supplement['source']['source_url']}" if supplement else "")
         return (
             f"{label}. {action['instruction']}\n"
             f"출처: {source['manual_name']} ({source['document_id']}), {source_location(source)}\n"
-            f"참고 원문:\n{source['excerpt']}\n{OUTCOME_PROMPT}"
+            f"{'안내 근거' if source.get('source_url') else '참고 원문'}:\n{source['excerpt']}{extra}\n{OUTCOME_PROMPT}"
         )

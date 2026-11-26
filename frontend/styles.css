@@ -93,6 +93,9 @@ button:disabled, input:disabled, textarea:disabled { opacity: .6; cursor: defaul
 .record-list { display: grid; gap: .6rem; padding: 0; list-style: none; }
 .record-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .82rem 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: .8rem; }
 .record-actions { display: flex; gap: .35rem; flex-wrap: wrap; }
+#model-unknown-label { display: flex; align-items: center; gap: .45rem; width: fit-content; }
+#device-model-unknown { accent-color: var(--accent); }
+#device-model-field input, #device-washer-type-field select { width: min(100%, 27rem); }
 @media (max-width: 440px) {
   .top-inner, main { width: calc(100% - 1rem); }
   .top-inner { gap: .25rem; }

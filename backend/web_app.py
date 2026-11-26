@@ -8,11 +8,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
+from dotenv import load_dotenv
 
-from agent import TERMINAL_STATES, SelfCareAgent
+from agent import (DISPLAY_ILLUSTRATIONS, TERMINAL_STATES, TOP_LOADER_ACTION_ILLUSTRATIONS,
+                   WASHER_TYPE_CHOICES, WASHER_TYPES, SelfCareAgent)
 from case_store import JsonCaseStore, now
 from cli import DEFAULT_ARCHIVE, ROOT
-from manual_search import MANUALS, alerts_for, available_models
+from manual_search import MANUAL_ALERTS, alerts_for, available_models
+from support_knowledge import TOP_LOADER_DISPLAY_CODES
 from reports import customer_report
 
 
@@ -26,7 +29,8 @@ IDENTIFIER = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
 STATE_FIELDS = ("pending", "condition", "asked_model", "asked_code", "results_only", "no_displayed_code")
 ASSETS = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
           "/styles.css": ("styles.css", "text/css")}
-for photo in ("washer-error-display", "drain-hose-down", "drain-hose-straight",
+ASSETS["/guides/washer-model-label-official.jpg"] = ("guides/washer-model-label-official.jpg", "image/jpeg")
+for photo in (*DISPLAY_ILLUSTRATIONS.values(), "drain-hose-down", "drain-hose-straight",
               "balance-laundry", "washer-door", "inlet-tap"):
     filename = f"guides/{photo}.png"
     ASSETS[f"/{filename}"] = (filename, "image/png")
@@ -100,8 +104,8 @@ class Handler(BaseHTTPRequestHandler):
             browser_id = self.browser_id()
             history = self.server.store.history(browser_id) if browser_id else []
             self.json_response(200, cases=[self.summary(case) for case in history])
-        elif self.path in ASSETS:
-            filename, media = ASSETS[self.path]
+        elif urlsplit(self.path).path in ASSETS:
+            filename, media = ASSETS[urlsplit(self.path).path]
             self.send_data(200, (ROOT / "frontend" / filename).read_bytes(), media)
         else:
             route = re.fullmatch(r"/api/cases/([a-f0-9-]{36})/media/([a-f0-9-]{36})", self.path)
@@ -136,7 +140,7 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def summary(case):
         return {key: getattr(case, key) for key in (
-            "case_id", "model", "category", "device_id", "device_name", "error_code", "display_label", "status",
+            "case_id", "model", "category", "washer_type", "device_id", "device_name", "error_code", "display_label", "status",
             "created_at", "updated_at", "previous_case_id", "evidence_submitted_at",
         )}
 
@@ -183,8 +187,18 @@ class Handler(BaseHTTPRequestHandler):
                 break
             seen.add(previous.case_id)
             chain.append(previous)
-        history = [message for item in reversed(chain) for message in item.messages]
-        self.respond_with_case(self.restore_agent(case), None, history=history,
+        agent = self.restore_agent(case)
+        product = agent.image_washer_type()
+        history = []
+        for item in reversed(chain):
+            for original in item.messages:
+                message = dict(original)
+                if message.get("illustration") == "washer-error-display":
+                    message["illustration"] = DISPLAY_ILLUSTRATIONS.get(product)
+                elif product != "top_loader" and message.get("illustration") in TOP_LOADER_ACTION_ILLUSTRATIONS.values():
+                    message.pop("illustration")
+                history.append(message)
+        self.respond_with_case(agent, None, history=history,
                                attachment_names=[a["name"] for a in case.attachments])
 
     def read_body(self, limit):
@@ -244,7 +258,15 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("등록된 기기를 다시 선택해 주세요.")
             if device_name is not None and (not isinstance(device_name, str) or len(device_name) > 60):
                 raise ValueError("기기 이름은 60자까지 입력할 수 있어요.")
-            self.start_case(model, category, device_id, device_name)
+            guidance_mode = payload.get("guidance_mode", "hybrid")
+            if guidance_mode not in ("hybrid", "manual_only"):
+                raise ValueError("안내 방식이 올바르지 않아요.")
+            washer_type = payload.get("washer_type")
+            if washer_type is not None and (
+                category != "washer" or model or not isinstance(washer_type, str) or washer_type not in WASHER_TYPES
+            ):
+                raise ValueError("사용 중인 세탁기 유형을 확인해 주세요.")
+            self.start_case(model, category, device_id, device_name, guidance_mode=guidance_mode, washer_type=washer_type)
             return
         match = re.fullmatch(r"/api/cases/([a-f0-9-]{36})/(message|report|edit-report|attachment|finish-media|schedule|open|recur)", self.path)
         case = self.server.store.load(match[1]) if match and IDENTIFIER.fullmatch(match[1]) else None
@@ -257,7 +279,8 @@ class Handler(BaseHTTPRequestHandler):
         if match[2] == "recur":
             if case.status != "resolved":
                 raise ValueError("해결된 상담에서만 재발 상담을 시작할 수 있어요.")
-            self.start_case(case.model, case.category, case.device_id, case.device_name, previous=case)
+            self.start_case(case.model, case.category, case.device_id, case.device_name, previous=case,
+                            guidance_mode=case.guidance_mode, washer_type=case.washer_type)
             return
         agent = self.restore_agent(case)
         if match[2] == "message":
@@ -341,9 +364,11 @@ class Handler(BaseHTTPRequestHandler):
         self.save_agent(agent)
         self.respond_with_case(agent, message)
 
-    def start_case(self, model, category, device_id, device_name, previous=None):
+    def start_case(self, model, category, device_id, device_name, previous=None, *, guidance_mode="hybrid", washer_type=None):
         agent = SelfCareAgent(self.server.archive, model=model, web=True)
         case = agent.case
+        case.guidance_mode = guidance_mode
+        case.washer_type = washer_type
         case.browser_id = self.browser_id()
         case.category, case.device_id, case.device_name = category, device_id, device_name
         self.link_device_history(case, previous)
@@ -406,8 +431,18 @@ class Handler(BaseHTTPRequestHandler):
             "service_offered": ["네", "아니요"],
         }.get(case.status, [])
         if case.status == "collecting":
-            choices = ([*alerts_for(agent.archive, case.model), "코드 없음", "코드 확인 어려움"] if case.model
-                       else [*MANUALS, "모델명 확인 어려움"]) if case.category == "washer" else ["모델명 확인 어려움"]
+            if case.category == "washer" and case.model:
+                choices = [*alerts_for(agent.archive, case.model), "코드 없음", "코드 확인 어려움"]
+            elif case.washer_type:
+                # These buttons record what the customer sees. Guidance is
+                # still matched separately against the selected washer type.
+                codes = TOP_LOADER_DISPLAY_CODES if case.washer_type == "top_loader" else MANUAL_ALERTS
+                choices = [*codes, "코드 없음", "코드 확인 어려움"]
+            else:
+                choices = ["모델명 확인 어려움"]
+                extra["model_picker"] = case.category == "washer"
+        elif case.status == "choosing_washer_type":
+            choices = list(WASHER_TYPE_CHOICES.values())
         if case.service_request:
             # The private callback number is available in the local handoff record only.
             extra["schedule"] = {key: value for key, value in case.service_request.items() if key != "callback_phone"}
@@ -424,6 +459,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    load_dotenv(ROOT / ".env")
     with SmartCareServer(("127.0.0.1", 8765)) as server:
         print("SmartCare 웹 상담: http://127.0.0.1:8765", flush=True)
         try:

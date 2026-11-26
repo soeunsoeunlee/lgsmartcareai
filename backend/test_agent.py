@@ -5,18 +5,72 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from zipfile import ZipFile
 
 from agent import SelfCareAgent, referenced_actions
 from case_store import JsonCaseStore
 from cli import DEFAULT_ARCHIVE, local_search, openai_demo, run_chat
-from llm import DemoTurn, generate_answer
+from llm import DemoTurn, generate_answer, rank_public_support
 from manual_search import MANUALS, reviewed_alert_steps
+from support_knowledge import official_code_reference
 
 
 class LocalAgentTests(unittest.TestCase):
     def setUp(self):
         self.agent = SelfCareAgent(DEFAULT_ARCHIVE)
         self.agent.start()
+
+    def test_official_support_adds_no_code_spin_guidance_only_in_hybrid_mode(self):
+        public_url = "https://www.lge.co.kr/support/solutions-20150465968160"
+        rows = {"solutions-20150465968160_main": {"source_url": public_url, "product_type": "top_loader",
+                                                 "content": "선반이나 수납장이 세탁기에 부딪치는지 확인합니다."}}
+        with (patch.dict(os.environ, {"OPENAI_API_KEY": ""}),
+              patch("support_knowledge.v6_for", return_value={}),
+              patch("support_knowledge.knowledge_for", return_value=rows)):
+            for mode, status in [("manual_only", "collecting_attachments"), ("hybrid", "checking_condition")]:
+                agent = SelfCareAgent(DEFAULT_ARCHIVE, model="TR14WK1", web=True)
+                agent.case.guidance_mode = mode
+                agent.start()
+                agent.handle("코드 없음")
+                agent.case.service_detail = "탈수할 때 쿵쿵 소리가 나요."
+                message = agent.report_saved()
+                self.assertEqual(agent.case.status, status)
+                if mode == "hybrid":
+                    self.assertIn(public_url, message)
+                    self.assertIn("가벼운 물건을 치워", agent.handle("네"))
+
+    def test_v6_zip_supplies_new_type_specific_guidance_and_code_reference(self):
+        source = "solutions-1779828"
+        url = f"https://www.lge.co.kr/support/{source}"
+        row = {"source_id": source, "source_url": url, "products": ["드럼세탁기"],
+               "title": "[LG 드럼세탁기] IE 에러가 떠요", "content_status": "text",
+               "content": "수도꼭지가 제대로 열려 있는지 먼저 확인해 주세요."}
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+            root = Path(directory)
+            with ZipFile(root / "lg_smartcare_v6_full_results (1).zip", "w") as bundle:
+                bundle.writestr("knowledge.json", json.dumps([row]))
+            archive = root / "manuals" / "manuals.zip"
+            agent = SelfCareAgent(archive, web=True)
+            agent.case.washer_type = "front_loader"
+            agent.start()
+            agent.handle("코드 없음")
+            agent.case.service_detail = "물이 안 들어와요."
+            self.assertIn(url, agent.report_saved())
+            self.assertIn("수도꼭지를 부드럽게 열어", agent.handle("네"))
+            self.assertEqual(agent.case.actions[-1]["source"]["knowledge_version"], "v6")
+            self.assertEqual(official_code_reference(archive, None, "IE", "front_loader"), url)
+            self.assertIsNone(official_code_reference(archive, None, "IE", "top_loader"))
+
+    def test_support_ranking_never_sends_unknown_candidates_or_accepts_invented_ids(self):
+        with patch("llm.OpenAI") as client:
+            create = client.return_value.__enter__.return_value.responses.create
+            create.return_value = SimpleNamespace(status="completed", output_text='{"order":["fabricated","top_spin_contact"]}')
+            order = rank_public_support("SPIN_NOISE", ("top_spin_contact", "private entered text", "top_fill_supply"))
+            self.assertEqual(order, ["top_spin_contact"])
+            request = create.call_args.kwargs
+            self.assertFalse(request["store"])
+            self.assertNotIn("private entered text", request["input"])
+            self.assertNotIn("top_fill_supply", request["input"])
 
     def test_registered_models_find_only_their_own_pages(self):
         expected = {
@@ -155,6 +209,7 @@ class LocalAgentTests(unittest.TestCase):
 
     def test_web_ue_tries_applicable_steps_before_report(self):
         agent = SelfCareAgent(DEFAULT_ARCHIVE, model="T25OZ0", web=True)
+        agent.case.guidance_mode = "manual_only"
         agent.start()
         self.assertIn("세탁물이 한쪽으로 치우쳐 있나요?", agent.handle("UE"))
         self.assertIn("세탁물을 고르게 펴세요.", agent.handle("네"))

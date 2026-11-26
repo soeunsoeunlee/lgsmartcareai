@@ -1,7 +1,7 @@
 """Customer and technician views of the same consultation record."""
 
 from case_store import Case
-from agent import SYMPTOM_MANUAL_SECTIONS, observed_hose_conditions
+from agent import SYMPTOM_MANUAL_SECTIONS, WASHER_TYPES, observed_hose_conditions
 from manual_search import explain_alert, source_location
 
 
@@ -68,6 +68,7 @@ def customer_report(case: Case, archive=None) -> dict:
     return {
         "case_id": case.case_id,
         "model": case.model,
+        "washer_type": WASHER_TYPES.get(case.washer_type),
         "error_code": case.error_code,
         "display_label": case.display_label,
         "display_code_status": case.display_code_status,
@@ -96,7 +97,7 @@ def technician_report(case: Case, archive=None) -> dict:
     return {
         "schema_version": 1,
         "summary": customer_report(case, archive),
-        "device": {"id": case.device_id, "name": case.device_name, "category": case.category},
+        "device": {"id": case.device_id, "name": case.device_name, "category": case.category, "washer_type": case.washer_type},
         "created_at": case.created_at,
         "updated_at": case.updated_at,
         "customer_symptoms": case.symptoms,

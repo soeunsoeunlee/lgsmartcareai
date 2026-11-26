@@ -228,8 +228,10 @@ class WebConsultationTest(unittest.TestCase):
             self.assertEqual((response.status, response.getheader("Content-Type")), (200, mime))
             response.read()
 
-        _, started = post("/api/cases", {"model": None})
+        _, started = post("/api/cases", {"model": None, "guidance_mode": "manual_only"})
         self.assertIn("모델명", started["message"])
+        self.assertTrue(started["model_picker"])
+        self.assertEqual(started["illustration"], "washer-model-label")
         root = "/api/cases/" + started["case_id"]
         _, reply = post(root + "/message", {"text": "TR14WK1"})
         self.assertIn("코드 없음", reply["choices"])
@@ -270,3 +272,30 @@ class WebConsultationTest(unittest.TestCase):
         self.assertEqual(reply["customer_report"]["status"], "resolved")
         self.assertIsNone(reply["customer_report"]["preferred_visit_at"])
         self.assertEqual(post(root + "/finish-media", {})[0], 400)
+
+        _, started = post("/api/cases", {"model": None, "guidance_mode": "manual_only"})
+        root = "/api/cases/" + started["case_id"]
+        _, types = post(root + "/message", {"text": "모델명 확인 어려움"})
+        self.assertEqual(types["status"], "choosing_washer_type")
+        self.assertEqual(types["choices"], ["LG 드럼 세탁기", "LG 통돌이 세탁기", "LG 워시타워",
+                                            "LG 미니세탁기", "유형도 확인 어려움"])
+        _, code_prompt = post(root + "/message", {"text": "LG 미니세탁기"})
+        self.assertEqual(code_prompt["washer_type"], "mini_washer")
+        self.assertIsNone(code_prompt["model"])
+        self.assertEqual(code_prompt["illustration"], "washer-error-display-mini")
+        self.assertTrue({"OE", "dL", "CL", "FE", "FF", "tcL"} <= set(code_prompt["choices"]))
+        self.assertIn("코드 없음", code_prompt["choices"])
+        self.assertEqual(post(root + "/message", {"text": "코드 없음"})[1]["status"], "collecting_report")
+        _, saved_type = post("/api/cases", {"washer_type": "wash_combo"})
+        self.assertEqual(saved_type["washer_type"], "wash_combo")
+        self.assertIn("LG 워시콤보", saved_type["message"])
+        self.assertEqual(saved_type["illustration"], "washer-error-display-combo")
+        self.assertTrue({"OE", "dL", "CL", "FE", "FF", "tcL"} <= set(saved_type["choices"]))
+        self.assertNotIn("model_picker", saved_type)
+        _, after_code = post("/api/cases/" + saved_type["case_id"] + "/message", {"text": "OE"})
+        self.assertEqual(after_code["error_code"], "OE")
+
+        _, top_loader = post("/api/cases", {"washer_type": "top_loader"})
+        self.assertTrue({"OE", "dL", "LE1", "tCL", "tC", "PE", "PF", "vS", "uS"} <= set(top_loader["choices"]))
+        _, after_code = post("/api/cases/" + top_loader["case_id"] + "/message", {"text": "vS"})
+        self.assertEqual(after_code["error_code"], "VS")
